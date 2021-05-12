@@ -1,0 +1,204 @@
+---
+slug: apples-arkit3-0-just-made-ar-actually-useful-for-us
+title: Apple’s ARKit3.0 just made AR actually useful (for us)
+date: 2021-05-12
+author: martijn
+tags: []
+---
+
+
+*As Technical Director at[ Ace & Tate](https://www.aceandtate.com/), the team and I are constantly trying to improve the experience of trying our glasses on, without needing to visit a store. One way to do this is through our ‘[Virtual Try-On](https://www.aceandtate.com/nl-en/virtual-try-on)’ service which allows the user to upload a short video of them turning their head, after which the user can see our frames on their face from multiple angles.*
+
+*Apple is just about to release a new iOS that will take this experience to the next level. We’ve been experimenting with the possibilities, using our frames and we want to share the process with you.*
+
+# The new AR Quick Look and Reality Composer
+
+From iOS13/iPadOS13 onwards, AR Quick Look allows you to use the front facing, TrueDepth camera on the iPhone or iPad.
+
+In addition, Apple’s new 3D scene creation tool, Reality Composer, allows you to create scenes with a face as an anchor point in the virtual world. This means you can render 3D objects, with thecorrect real-life dimensions on any recognisable face. We took part in a little hackathon to see if/how it would work.
+
+This post is about our findings, some of the issues we ran into and how we solved them using USD Tools, ARKit 3, Reality Composer and AR Quick Look. Welcome to the world of converting files.
+
+![](https://miro.medium.com/max/2532/1*oL1PeZHYxMNmyYP5CsjZdQ.png)
+
+# Prerequisites
+
+The files and tools we needed:
+
+* A good 3D model of an object that you would like to try out. We eventually needed a .**usdz** file, but a lot of tools don’t export directly to this format (yet). We have started with an .**obj** file, but a .**gltf** would also work.
+* USD Tools from [Apple](https://developer.apple.com/augmented-reality/quick-look/). This is a package of command line tools that allows the conversions we need.
+* XCode 11+, which is shipped with Reality Composer (used to create the 3D scenes).
+* An iPhone or iPad with a TrueDepth camera (FaceID camera), running iOS13+/iPadOS13+. Optionally, you can install the Reality Composer App on the device as well.
+
+> Note, at the time of writing, iOS13/iPadOS13 are still in the beta stage, as are the Apple developer tools that we have used.
+
+# Converting the road to success
+
+Reality Composer is the application from Apple that allows us to set the “scene” to position objects on/near a face. Essentially, a face defines the coordinate system of the Augmented Reality world.
+
+![Reality Composer basic Face scene.](https://miro.medium.com/max/2708/0*01zCoIMqtaLA4dYr)
+
+To add objects to the scene, Reality Composer accepts zipped versions of 3D models in the form of Pixar/Apple’s ‘Universal Scene Description’ (USD) files: **.usdz**.
+
+We use a 3D model from our in-house design team. Unfortunately, the application that they use: KeyShot, does not allow exporting to .**usdz** directly.
+
+We started the journey with an .**obj** and .**mtl** file of our [Axl](https://www.aceandtate.com/nl/axl-smoke) frame and worked our way to .**usdz**.
+
+With the beta tools currently out there, it took us a day to achieve the result in the first image above (glasses positioned correctly, with the right material properties and texture), converting between different file types and making some adjustments along the way.
+
+![](https://miro.medium.com/max/1868/1*Rbn92M2F0xYa8CEx8K4Fhg.png)
+
+
+
+Read all the steps below (bear with me here, because the amount of file conversions we had to undertake is simply horrifying):
+
+# 1. .obj (with.mtl) to .usdz
+
+Inside the USD Tool package, there is a Python application called `usdzconvert` that allows conversion from .**obj** to .**usdz**. Easy enough, you might think.
+
+But, when we ran this tool, we lost some valuable information:
+
+* All material properties: opacity, shine, colour, textures
+* Real-world dimensions. The object turned out to be the size of a building after importing it into Reality Composer during the first runs.
+* Most of the material definitions in the .**usda** file (see below), because `usdzconvert` did not take the .**mtl** file into account.
+
+![](https://miro.medium.com/max/2168/1*WnbtVo6NK_hsmQkvfRCRiA.png)
+
+The *usdzconvert* tool allows us to add material properties from the command line. That being said, they would be applied globally which wasn’t much use for us (see above image).
+
+The dimensions can be fixed by finding the correct value for the *\-metersPerUnit* parameter in the converter tool (it was 0,001 for us).
+
+To stop *usdzconvert* ignoring the .**mtl** (which also holds some material information), we needed a detour, converting .**obj**+.**mtl** to .**glb** and using *usdzconvert* on the .**glb**. There are some [solutions](https://www.creators3d.com/online-viewer) online, or command line tools to run locally, such as ‘npm install -g obj2gltf.’
+
+In retrospect, if we’d started with a .**glb** (or .**gltf**) format, we might have saved ourselves this hassle.
+
+# 2. .usdz to .usda to fix the material properties
+
+The results from converting to a .**usdz** file were not good enough to proceed in AR, but fortunately, we could open it up and take a look inside, to see what went wrong. To do this, we needed to convert the .**usdz** into a readable .**usda** file, by using the *usdcat* command line tool from USD Tools.
+
+Then we could open the .**usda** and look at one of the material definitions inside, using a text editor.
+
+```swift
+def Material “Clear_Shiny_Acetate_Smoke”
+{
+    token outputs:surface.connect = </ace_tate_axl/Materials/Clear_Shiny_Acetate_Smoke/surfaceShader.outputs:surface>
+    def Shader “surfaceShader”
+    {
+        uniform token info:id = “UsdPreviewSurface”
+        color3f inputs:diffuseColor = (0, 0, 0)
+        token outputs:surface
+    }
+}
+```
+
+We had a ‘diffuseColor’ specified, but no shine, or opacity properties, so we added them and corrected the colour to represent the Axl Pine:
+
+```swift
+def Material “Clear_Shiny_Acetate_Smoke”
+{
+    token outputs:surface.connect = </ace_tate_axl/Materials/Clear_Shiny_Acetate_Smoke/surfaceShader.outputs:surface>
+    def Shader “surfaceShader”
+    {
+        uniform token info:id = “UsdPreviewSurface”
+        color3f inputs:diffuseColor = (0.50, 0.63, 0.19)
+        float inputs:metallic = 0.9
+        float inputs:roughness = 0.2
+        float inputs:opacity = 0.8
+ 
+        token outputs:surface
+    }
+}
+```
+
+We corrected the materials for the glasses and the metal inlay in similar ways. Also, one of the first properties in the document was the metersPerUnit; we corrected the value here, so we could omit it from the *usdzconvert* command.
+
+> MacOS Mojave’s Finder is capable of directly showing a preview of the newly saved .**usda** file. However, the corrected material properties are not visible. We assume that this will be featured from MacOS Catalina onwards.
+
+To see actual results, we needed to import the 3D model in Reality Composer (see below).
+
+# 3. End result in Reality Composer: .usda to .usdz
+
+From the USD Tools, we used *usdzconvert* again to convert the .**usda** back to the beloved .**usdz**.
+
+We imported the result in Reality Composer for the big reveal, but in reality, it actually took us a couple of tries to get the property values right.
+
+![](https://miro.medium.com/max/3176/0*1fbhcjhzgFNaU5n0)
+
+# 4. Adding textures
+
+As you can see in the first image, we also experimented with adding texture on the acetate material of the frame.
+
+Without going too much in detail, see the result of the material definition in the .**usda** file below:
+
+```swift
+def Material “Clear_Shiny_Acetate_Smoke”
+{
+    token outputs:surface.connect = </ace_tate_axl/Materials/Clear_Shiny_Acetate_Smoke/surfaceShader.outputs:surface>
+    def Shader “surfaceShader”
+    {
+        uniform token info:id = “UsdPreviewSurface”
+        color3f inputs:diffuseColor.connect = </ace_tate_axl/Materials/Clear_Shiny_Acetate_Smoke/diffuseColor_texture.outputs:rgb>
+        color3f inputs:diffuseColor = (0.1, 0.1, 0.1)
+        float inputs:metallic = 0.9
+        float inputs:roughness = 0.1
+        float inputs:opacity = 0.95
+        token outputs:surface
+    }
+    def Shader “uvReader_st”
+    {
+        uniform token info:id = “UsdPrimvarReader_float2”
+        token inputs:varname = “st”
+        float2 outputs:result
+    }
+    def Shader “diffuseColor_texture”
+    {
+        uniform token info:id = “UsdUVTexture”
+        float4 inputs:fallback = (0, 0, 0, 1)
+        asset inputs:file = @texture/tortoiseshell.jpg@
+        float2 inputs:st.connect = </ace_tate_axl/Materials/Clear_Shiny_Acetate_Smoke/uvReader_st.outputs:result>
+        token inputs:wrapS = “repeat”
+        token inputs:wrapT = “repeat”
+        float3 outputs:rgb
+    }
+}
+```
+
+![](https://miro.medium.com/max/2276/1*uqDWIjsBH3y41vQTaAvXNg.png)
+
+# Readying for the web
+
+Now that we had a good looking pair of glasses in Reality Composer, we needed to correctly position it on a ‘face’.
+
+The mask shown in Reality Composer will get you far, but we noticed that using the live AR editing in the Reality Composer App on an iPad, with a real frame as an example, is faster.
+
+To use the scene for a website (or any type of file sharing), export it as a .**reality** file in Reality Composer.
+
+The file will open directly into the AR experience on AR Quick Look on any iOS13/iPadOS13 device.
+
+Safari will automatically pick up on specific attributes on html elements to show the AR Quick Look logo. Behind the logo, we placed virtual Axl frame in a .**reality** format.
+
+Tapping the logo will open the front facing camera and load the 3D object to place on a face.
+
+```html
+<a rel=”ar” href=”/path/to/model.reality”>
+    <img src=”/assets/arkit-icon.png”alt=”AR View” />
+</a>
+```
+
+Note that the anchor must wrap an image in order to fulfill the task. It is also possible to control what sharing the experience does: share the .**reality** file, or share the page that it’s opened from.
+
+We placed it right from the image gallery, replacing our current solution when the device is supported.
+
+![](https://miro.medium.com/max/2632/0*Obck--mOmek-iouM)
+
+# What’s next?
+
+We were truly impressed with what could be achieved in a single day. However, there are a couple of tweaks needed, before it can be brought into production.
+
+Those with a sharp eye might have noticed that the metal insets in the temple arms of the Axl are missing in the virtual model. They were probably lost in the initial export from the KeyShot project.
+
+The next step is to give metal or titanium frames a try. They are typically very thin, like the [Elliot](https://www.aceandtate.com/nl/elliot-titanium-satin-gold), so might not even be picked up by the programme.
+
+We’re also going to see how far we can go with sunglasses, more specifically, getting the colour and opacity of the lenses right, especially when they have a gradient, seen on the [Benjamin](https://www.aceandtate.com/nl/benjamin-tiger-wood-sun).
+
+So far, all steps to create the .**reality** file have been done manually. We would like to experiment with how far we can go into automating this, including the positioning in the scene.
